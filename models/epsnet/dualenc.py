@@ -247,7 +247,7 @@ class DualEncoderEpsNetwork(nn.Module):
                 anneal_power, return_unreduced_loss, return_unreduced_edge_loss, extend_order, extend_radius, is_sidechain)
 
 
-    def get_loss_diffusion(self, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
+    def get_loss_diffusion(self, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, 
                  anneal_power=2.0, return_unreduced_loss=False, return_unreduced_edge_loss=False, extend_order=True, extend_radius=True, is_sidechain=None):
         N = atom_type.size(0)
         node2graph = batch
@@ -261,9 +261,15 @@ class DualEncoderEpsNetwork(nn.Module):
         a = self.alphas.index_select(0, time_step)  # (G, )
         # Perterb pos
         a_pos = a.index_select(0, node2graph).unsqueeze(-1)  # (N, 1)
-        pos_noise = torch.zeros(size=pos.size(), device=pos.device)
-        pos_noise.normal_()
-        pos_perturbed = pos + pos_noise * (1.0 - a_pos).sqrt() / a_pos.sqrt()
+        # This is the original noising function which adds gaussian noise, uncomment to get gaussian noise.
+        # pos_noise = torch.zeros(size=pos.size(), device=pos.device)
+        # pos_noise.normal_()
+        # This is the new noising function which uses the interpolation between reactant and product
+        pos_noise = (R_G + P_G) / 2
+
+        # pos_perturbed = pos + pos_noise * (1.0 - a_pos).sqrt() / a_pos.sqrt()
+        a_pos.sqrt()
+        pos_perturbed = a_pos*pos + (1-a_pos)*pos_noise
 
         # Update invariant edge features, as shown in equation 5-7
         edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
@@ -279,50 +285,22 @@ class DualEncoderEpsNetwork(nn.Module):
             is_sidechain = is_sidechain
         )   # (E_global, 1), (E_local, 1)
 
-        edge2graph = node2graph.index_select(0, edge_index[0])
-        # Compute sigmas_edge
-        a_edge = a.index_select(0, edge2graph).unsqueeze(-1)  # (E, 1)
-
-        # Compute original and perturbed distances
-        d_gt = get_distance(pos, edge_index).unsqueeze(-1)   # (E, 1)
+        # Grab the generated bond distances to generate the global mask
         d_perturbed = edge_length
-        # Filtering for protein
-        train_edge_mask = is_train_edge(edge_index, is_sidechain)
-        d_perturbed = torch.where(train_edge_mask.unsqueeze(-1), d_perturbed, d_gt)
-
-        if self.config.edge_encoder == 'gaussian':
-            # Distances must be greater than 0 
-            d_sgn = torch.sign(d_perturbed)
-            d_perturbed = torch.clamp(d_perturbed * d_sgn, min=0.01, max=float('inf'))
-        d_target = (d_gt - d_perturbed) / (1.0 - a_edge).sqrt() * a_edge.sqrt()  # (E_global, 1), denoising direction
-
         global_mask = torch.logical_and(
                             torch.logical_or(d_perturbed <= self.config.cutoff, local_edge_mask.unsqueeze(-1)),
                             ~local_edge_mask.unsqueeze(-1)
                         )
-        target_d_global = torch.where(global_mask, d_target, torch.zeros_like(d_target))
+
+        # Apply the mask and equivariant transform to the generated edge_inv_global with the original geometry to generate the generated geometry
         edge_inv_global = torch.where(global_mask, edge_inv_global, torch.zeros_like(edge_inv_global))
-        target_pos_global = eq_transform(target_d_global, pos_perturbed, edge_index, edge_length)
-        node_eq_global = eq_transform(edge_inv_global, pos_perturbed, edge_index, edge_length)
-        loss_global = (node_eq_global - target_pos_global)**2
-        loss_global = 2 * torch.sum(loss_global, dim=-1, keepdim=True)
+        node_eq_global = eq_transform(edge_inv_global, pos, edge_index, edge_length)
 
-        target_pos_local = eq_transform(d_target[local_edge_mask], pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
-        node_eq_local = eq_transform(edge_inv_local, pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
-        loss_local = (node_eq_local - target_pos_local)**2
-        loss_local = 5 * torch.sum(loss_local, dim=-1, keepdim=True)
+        # Calculate global loss with target geometry and generated geometry
+        loss_global = (node_eq_global - pos)**2
+        loss_global = torch.sum(loss_global, dim=-1, keepdim=True)
 
-        # loss for atomic eps regression
-        loss = loss_global + loss_local
-        # loss_pos = scatter_add(loss_pos.squeeze(), node2graph)  # (G, 1)
-
-        if return_unreduced_edge_loss:
-            pass
-        elif return_unreduced_loss:
-            return loss, loss_global, loss_local
-        else:
-            return loss
-
+        return loss_global, loss_global, loss_global
 
     def langevin_dynamics_sample(self, atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
