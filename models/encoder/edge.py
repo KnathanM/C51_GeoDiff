@@ -44,12 +44,13 @@ class MLPEdgeEncoder(Module):
         self.hidden_dim = hidden_dim
         self.bond_emb = Embedding(100, embedding_dim=self.hidden_dim)
         self.mlp = MultiLayerPerceptron(1, [self.hidden_dim, self.hidden_dim], activation=activation)
+        self.t_emb_mlp = MultiLayerPerceptron(1, [self.hidden_dim, self.hidden_dim], activation=activation)
 
     @property
     def out_channels(self):
         return self.hidden_dim
 
-    def forward(self, edge_length, edge_type):
+    def forward(self, edge_length, edge_type, time_step):
         """
         Input:
             edge_length: The length of edges, shape=(E, 1).
@@ -57,9 +58,10 @@ class MLPEdgeEncoder(Module):
         Returns:
             edge_attr:  The representation of edges. (E, 2 * num_gaussians)
         """
+        t_emb = self.t_emb_mlp(time_step)
         d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)
         edge_attr = self.bond_emb(edge_type) # (num_edge, hidden_dim)
-        return d_emb * edge_attr # (num_edge, hidden)
+        return d_emb * edge_attr * t_emb # (num_edge, hidden)
 
 
 def get_edge_encoder(cfg):

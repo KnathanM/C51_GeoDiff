@@ -186,7 +186,8 @@ class DualEncoderEpsNetwork(nn.Module):
         # Encoding global
         edge_attr_global = self.edge_encoder_global(
             edge_length=edge_length,
-            edge_type=edge_type
+            edge_type=edge_type,
+            time_step=time_step
         )   # Embed edges
         # edge_attr += temb_edge
 
@@ -237,10 +238,10 @@ class DualEncoderEpsNetwork(nn.Module):
             return edge_inv_global, edge_inv_local
     
 
-    def get_loss(self, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
+    def get_loss(self, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G,
                  anneal_power=2.0, return_unreduced_loss=False, return_unreduced_edge_loss=False, extend_order=True, extend_radius=True, is_sidechain=None):
         if self.model_type == 'diffusion':
-            return self.get_loss_diffusion(atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
+            return self.get_loss_diffusion(atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G,
                 anneal_power, return_unreduced_loss, return_unreduced_edge_loss, extend_order, extend_radius, is_sidechain)
         elif self.model_type == 'dsm':
             return self.get_loss_dsm(atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
