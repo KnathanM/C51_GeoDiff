@@ -98,6 +98,8 @@ if __name__ == '__main__':
             batch=batch.batch,
             num_nodes_per_graph=batch.num_nodes_per_graph,
             num_graphs=batch.num_graphs,
+            R_G = batch.RG,
+            P_G = batch.PG,
             anneal_power=config.train.anneal_power,
             return_unreduced_loss=True
         )
@@ -134,6 +136,8 @@ if __name__ == '__main__':
                     batch=batch.batch,
                     num_nodes_per_graph=batch.num_nodes_per_graph,
                     num_graphs=batch.num_graphs,
+                    R_G = batch.RG,
+                    P_G = batch.PG,
                     anneal_power=config.train.anneal_power,
                     return_unreduced_loss=True
                 )

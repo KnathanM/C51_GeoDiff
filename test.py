@@ -92,7 +92,7 @@ if __name__ == '__main__':
             done_smiles.add(data.smiles)
     
     for i, data in enumerate(tqdm(test_set_selected)):
-        if data.smiles in done_smiles:
+        if data.name in done_smiles:
             logger.info('Molecule#%d is already done.' % i)
             continue
 
@@ -130,7 +130,7 @@ if __name__ == '__main__':
                 else:
                     data.pos_gen = pos_gen
                 results.append(data)
-                done_smiles.add(data.smiles)
+                done_smiles.add(data.name)
 
                 save_path = os.path.join(output_dir, 'samples_%d.pkl' % i)
                 logger.info('Saving samples to: %s' % save_path)
@@ -147,7 +147,7 @@ if __name__ == '__main__':
 
     def get_mol_key(data):
         for i, d in enumerate(test_set_selected):
-            if d.smiles == data.smiles:
+            if d.name == data.name:
                 return i
         return -1
     results.sort(key=get_mol_key)
