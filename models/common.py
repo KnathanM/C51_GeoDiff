@@ -230,7 +230,7 @@ def _extend_to_radius_graph(pos, edge_index, edge_type, cutoff, batch, unspecifi
 
 def extend_graph_order_radius(num_nodes, pos, edge_index, edge_type, batch, order=3, cutoff=10.0, 
                               extend_order=True, extend_radius=True, is_sidechain=None):
-    
+
     if extend_order:
         edge_index, edge_type = _extend_graph_order(
             num_nodes=num_nodes, 

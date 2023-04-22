@@ -137,7 +137,7 @@ class DualEncoderEpsNetwork(nn.Module):
             self.num_timesteps = self.sigmas.size(0)  # betas.shape[0]
 
 
-    def forward(self, atom_type, pos, bond_index, bond_type, batch, time_step, 
+    def forward(self, atom_type, pos, bond_index, bond_type, batch, time_step, num_nodes_per_graph,
                 edge_index=None, edge_type=None, edge_length=None, return_edges=False, 
                 extend_order=True, extend_radius=True, is_sidechain=None):
         """
@@ -183,11 +183,15 @@ class DualEncoderEpsNetwork(nn.Module):
             # DDPM loss implicit handle the noise variance scale conditioning
             sigma_edge = torch.ones(size=(edge_index.size(1), 1), device=pos.device)  # (E, 1)
 
+        # Routine to calculate how many edges below to each molecule
+        num_edges_per_graph = num_nodes_per_graph*(num_nodes_per_graph-1)
+
         # Encoding global
         edge_attr_global = self.edge_encoder_global(
             edge_length=edge_length,
             edge_type=edge_type,
-            time_step=time_step
+            time_step=time_step,
+            num_edges_per_graph=num_edges_per_graph
         )   # Embed edges
         # edge_attr += temb_edge
 
@@ -198,6 +202,7 @@ class DualEncoderEpsNetwork(nn.Module):
             edge_length=edge_length,
             edge_attr=edge_attr_global,
         )
+        print("node_attr_global: ",node_attr_global)
         ## Assemble pairwise features
         h_pair_global = assemble_atom_pair_feature(
             node_attr=node_attr_global,
@@ -210,7 +215,9 @@ class DualEncoderEpsNetwork(nn.Module):
         # Encoding local
         edge_attr_local = self.edge_encoder_local(
             edge_length=edge_length,
-            edge_type=edge_type
+            edge_type=edge_type,
+            time_step=time_step,
+            num_edges_per_graph=num_edges_per_graph
         )   # Embed edges
         # edge_attr += temb_edge
 
@@ -280,6 +287,7 @@ class DualEncoderEpsNetwork(nn.Module):
             bond_type = bond_type,
             batch = batch,
             time_step = time_step,
+            num_nodes_per_graph = num_nodes_per_graph,
             return_edges = True,
             extend_order = extend_order,
             extend_radius = extend_radius,
@@ -298,6 +306,8 @@ class DualEncoderEpsNetwork(nn.Module):
         node_eq_global = eq_transform(edge_inv_global, pos, edge_index, edge_length)
 
         # Calculate global loss with target geometry and generated geometry
+        print("node_eq_global: ",node_eq_global)
+        print("pos: ", pos)
         loss_global = (node_eq_global - pos)**2
         loss_global = torch.sum(loss_global, dim=-1, keepdim=True)
 

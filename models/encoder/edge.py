@@ -50,7 +50,7 @@ class MLPEdgeEncoder(Module):
     def out_channels(self):
         return self.hidden_dim
 
-    def forward(self, edge_length, edge_type, time_step):
+    def forward(self, edge_length, edge_type, time_step, num_edges_per_graph):
         """
         Input:
             edge_length: The length of edges, shape=(E, 1).
@@ -58,8 +58,10 @@ class MLPEdgeEncoder(Module):
         Returns:
             edge_attr:  The representation of edges. (E, 2 * num_gaussians)
         """
+        time_step = time_step.unsqueeze(-1).float()
         t_emb = self.t_emb_mlp(time_step)
-        d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)
+        t_emb = torch.repeat_interleave(t_emb, num_edges_per_graph, dim=0)
+        d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)    
         edge_attr = self.bond_emb(edge_type) # (num_edge, hidden_dim)
         return d_emb * edge_attr * t_emb # (num_edge, hidden)
 
