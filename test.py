@@ -23,7 +23,6 @@ def num_confs(num:str):
 
 
 if __name__ == '__main__':
-    torch.cuda.empty_cache()
     parser = argparse.ArgumentParser()
     parser.add_argument('ckpt', type=str, help='path for loading the checkpoint')
     parser.add_argument('--save_traj', action='store_true', default=False,
@@ -78,7 +77,6 @@ if __name__ == '__main__':
     logger.info('Loading model...')
     model = get_model(ckpt['config'].model).to(args.device)
     model.load_state_dict(ckpt['model'])
-
     test_set_selected = []
     for i, data in enumerate(test_set):
         if not (args.start_idx <= i < args.end_idx): continue
@@ -131,7 +129,7 @@ if __name__ == '__main__':
                     data.pos_gen = torch.stack(pos_gen_traj)
                 else:
                     data.pos_gen = pos_gen
-                results.append(data)
+                results.append(data.cpu())
                 done_smiles.add(data.name)
 
                 save_path = os.path.join(output_dir, 'samples_%d.pkl' % i)

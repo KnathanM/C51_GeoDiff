@@ -340,40 +340,41 @@ class DualEncoderEpsNetwork(nn.Module):
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         pos_traj = []
-        seq = range(self.num_timesteps-n_steps+1, self.num_timesteps+1)
-        seq_next = [0] + list(seq[:-1])
-        pos = pos_init
-        for i, j in zip(reversed(seq), reversed(seq_next)):
-            t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=pos.device)
-            # Send position through GFN and recover generated geometry
-            edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
-                            atom_type=atom_type,
-                            pos=pos,
-                            bond_index=bond_index,
-                            bond_type=bond_type,
-                            batch=batch,
-                            time_step=t,
-                            num_nodes_per_graph=num_nodes_per_graph,
-                            return_edges=True,
-                            extend_order=extend_order,
-                            extend_radius=extend_radius,
-                            is_sidechain=is_sidechain
-                        )   # (E_global, 1), (E_local, 1)
-            gen_pos = eq_transform(edge_inv_global, pos, edge_index, edge_length)
-            
-            # Calculate amount of noise to add to generated geometry
-            next_timestep = torch.full(size=(num_graphs,), fill_value=j, dtype=torch.long, device=pos.device)
-            a = next_timestep / self.num_timesteps
-            a_pos = a.index_select(0, batch).unsqueeze(-1)
+        with torch.no_grad():
+            seq = range(self.num_timesteps-n_steps+1, self.num_timesteps+1)
+            seq_next = [0] + list(seq[:-1])
+            pos = pos_init
+            for i, j in zip(reversed(seq), reversed(seq_next)):
+                t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=pos.device)
+                # Send position through GFN and recover generated geometry
+                edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
+                                atom_type=atom_type,
+                                pos=pos,
+                                bond_index=bond_index,
+                                bond_type=bond_type,
+                                batch=batch,
+                                time_step=t,
+                                num_nodes_per_graph=num_nodes_per_graph,
+                                return_edges=True,
+                                extend_order=extend_order,
+                                extend_radius=extend_radius,
+                                is_sidechain=is_sidechain
+                            )   # (E_global, 1), (E_local, 1)
+                gen_pos = eq_transform(edge_inv_global, pos, edge_index, edge_length)
+                
+                # Calculate amount of noise to add to generated geometry
+                next_timestep = torch.full(size=(num_graphs,), fill_value=j, dtype=torch.long, device=pos.device)
+                a = next_timestep / self.num_timesteps
+                a_pos = a.index_select(0, batch).unsqueeze(-1)
 
-            # Add noise to generated geometry
-            pos_next = (1-a_pos)*gen_pos + a_pos*pos_init
-            pos = pos_next
-            pos_traj.append(pos.clone().cpu())
+                # Add noise to generated geometry
+                pos_next = (1-a_pos)*gen_pos + a_pos*pos_init
+                pos = pos_next
+                #pos_traj.append(pos.clone().cpu())
 
         return pos, pos_traj
 
-    def langevin_dynamics_sample_diffusion_old(self, atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius=True, 
+    def langevin_dynamics_sample_diffusion_old(self, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
 
@@ -408,6 +409,7 @@ class DualEncoderEpsNetwork(nn.Module):
                     bond_type=bond_type,
                     batch=batch,
                     time_step=t,
+                    num_nodes_per_graph=num_nodes_per_graph,
                     return_edges=True,
                     extend_order=extend_order,
                     extend_radius=extend_radius,
