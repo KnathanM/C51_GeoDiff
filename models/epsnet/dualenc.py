@@ -11,7 +11,7 @@ from utils.chem import BOND_TYPES
 from ..common import MultiLayerPerceptron, assemble_atom_pair_feature, generate_symmetric_edge_noise, extend_graph_order_radius
 from ..encoder import SchNetEncoder, GINEncoder, get_edge_encoder
 from ..geometry import get_distance, get_angle, get_dihedral, eq_transform
-# from diffusion import get_timestep_embedding, get_beta_schedule
+from .diffusion import get_timestep_embedding, get_beta_schedule, nonlinearity
 import pdb
 
 
@@ -60,19 +60,19 @@ class DualEncoderEpsNetwork(nn.Module):
         """
         self.edge_encoder_global = get_edge_encoder(config)
         self.edge_encoder_local = get_edge_encoder(config)
-        # self.hidden_dim = config.hidden_dim
+        self.hidden_dim = config.hidden_dim
         '''
         timestep embedding
         '''
-        # self.temb = nn.Module()
-        # self.temb.dense = nn.ModuleList([
-        #     torch.nn.Linear(config.hidden_dim,
-        #                     config.hidden_dim*4),
-        #     torch.nn.Linear(config.hidden_dim*4,
-        #                     config.hidden_dim*4),
-        # ])
-        # self.temb_proj = torch.nn.Linear(config.hidden_dim*4,
-        #                                  config.hidden_dim)
+        self.temb = nn.Module()
+        self.temb.dense = nn.ModuleList([
+             torch.nn.Linear(config.hidden_dim,
+                             config.hidden_dim*4),
+             torch.nn.Linear(config.hidden_dim*4,
+                             config.hidden_dim*4),
+         ])
+        self.temb_proj = torch.nn.Linear(config.hidden_dim*4,
+                                          config.hidden_dim)
         """
         The graph neural network that extracts node-wise features.
         """
@@ -183,6 +183,19 @@ class DualEncoderEpsNetwork(nn.Module):
             # DDPM loss implicit handle the noise variance scale conditioning
             sigma_edge = torch.ones(size=(edge_index.size(1), 1), device=pos.device)  # (E, 1)
 
+
+        # Timestep embedding from the GeoDiff of old
+        # # timestep embedding
+        temb = get_timestep_embedding(time_step, self.hidden_dim)
+        temb = self.temb.dense[0](temb)
+        temb = nonlinearity(temb)
+        temb = self.temb.dense[1](temb)
+        temb = self.temb_proj(nonlinearity(temb))  # (G, dim)
+        # from graph to node/edge level emb
+        node2graph = batch
+        edge2graph = node2graph.index_select(0, edge_index[0])
+        temb_edge = temb.index_select(0, edge2graph)  # (E , dim)
+
         # Routine to calculate how many edges below to each molecule
         num_edges_per_graph = num_nodes_per_graph*(num_nodes_per_graph-1)
 
@@ -193,7 +206,7 @@ class DualEncoderEpsNetwork(nn.Module):
             time_step=time_step,
             num_edges_per_graph=num_edges_per_graph
         )   # Embed edges
-        # edge_attr += temb_edge
+        edge_attr_global += temb_edge
 
         # Global
         node_attr_global = self.encoder_global(
@@ -202,7 +215,6 @@ class DualEncoderEpsNetwork(nn.Module):
             edge_length=edge_length,
             edge_attr=edge_attr_global,
         )
-        print("node_attr_global: ",node_attr_global)
         ## Assemble pairwise features
         h_pair_global = assemble_atom_pair_feature(
             node_attr=node_attr_global,
@@ -266,7 +278,7 @@ class DualEncoderEpsNetwork(nn.Module):
             0, self.num_timesteps, size=(num_graphs//2+1, ), device=pos.device)
         time_step = torch.cat(
             [time_step, self.num_timesteps-time_step-1], dim=0)[:num_graphs]
-        a = self.alphas.index_select(0, time_step)  # (G, )
+        a = time_step / self.num_timesteps  # (G, )
         # Perterb pos
         a_pos = a.index_select(0, node2graph).unsqueeze(-1)  # (N, 1)
         # This is the original noising function which adds gaussian noise, uncomment to get gaussian noise.
@@ -276,8 +288,8 @@ class DualEncoderEpsNetwork(nn.Module):
         pos_noise = (R_G + P_G) / 2
 
         # pos_perturbed = pos + pos_noise * (1.0 - a_pos).sqrt() / a_pos.sqrt()
-        a_pos.sqrt()
-        pos_perturbed = a_pos*pos + (1-a_pos)*pos_noise
+        #a_pos.sqrt()
+        pos_perturbed = (1-a_pos)*pos + a_pos*pos_noise
 
         # Update invariant edge features, as shown in equation 5-7
         edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
@@ -306,18 +318,16 @@ class DualEncoderEpsNetwork(nn.Module):
         node_eq_global = eq_transform(edge_inv_global, pos, edge_index, edge_length)
 
         # Calculate global loss with target geometry and generated geometry
-        print("node_eq_global: ",node_eq_global)
-        print("pos: ", pos)
         loss_global = (node_eq_global - pos)**2
         loss_global = torch.sum(loss_global, dim=-1, keepdim=True)
 
         return loss_global, loss_global, loss_global
 
-    def langevin_dynamics_sample(self, atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius=True, 
+    def langevin_dynamics_sample(self, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         if self.model_type == 'diffusion':
-            return self.langevin_dynamics_sample_diffusion(atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius, 
+            return self.langevin_dynamics_sample_diffusion(atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius, 
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
                         global_start_sigma, w_global, w_reg, 
                         sampling_type=kwargs.get("sampling_type", 'ddpm_noisy'), eta=kwargs.get("eta", 1.))
@@ -326,8 +336,44 @@ class DualEncoderEpsNetwork(nn.Module):
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
                         global_start_sigma, w_global, w_reg)
 
+    def langevin_dynamics_sample_diffusion(self, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius=True, 
+                                 n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
+                                 global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
+        pos_traj = []
+        seq = range(self.num_timesteps-n_steps+1, self.num_timesteps+1)
+        seq_next = [0] + list(seq[:-1])
+        pos = pos_init
+        for i, j in zip(reversed(seq), reversed(seq_next)):
+            t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=pos.device)
+            # Send position through GFN and recover generated geometry
+            edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
+                            atom_type=atom_type,
+                            pos=pos,
+                            bond_index=bond_index,
+                            bond_type=bond_type,
+                            batch=batch,
+                            time_step=t,
+                            num_nodes_per_graph=num_nodes_per_graph,
+                            return_edges=True,
+                            extend_order=extend_order,
+                            extend_radius=extend_radius,
+                            is_sidechain=is_sidechain
+                        )   # (E_global, 1), (E_local, 1)
+            gen_pos = eq_transform(edge_inv_global, pos, edge_index, edge_length)
+            
+            # Calculate amount of noise to add to generated geometry
+            next_timestep = torch.full(size=(num_graphs,), fill_value=j, dtype=torch.long, device=pos.device)
+            a = next_timestep / self.num_timesteps
+            a_pos = a.index_select(0, batch).unsqueeze(-1)
 
-    def langevin_dynamics_sample_diffusion(self, atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius=True, 
+            # Add noise to generated geometry
+            pos_next = (1-a_pos)*gen_pos + a_pos*pos_init
+            pos = pos_next
+            pos_traj.append(pos.clone().cpu())
+
+        return pos, pos_traj
+
+    def langevin_dynamics_sample_diffusion_old(self, atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
 

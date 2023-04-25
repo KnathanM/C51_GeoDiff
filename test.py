@@ -23,6 +23,7 @@ def num_confs(num:str):
 
 
 if __name__ == '__main__':
+    torch.cuda.empty_cache()
     parser = argparse.ArgumentParser()
     parser.add_argument('ckpt', type=str, help='path for loading the checkpoint')
     parser.add_argument('--save_traj', action='store_true', default=False,
@@ -98,21 +99,22 @@ if __name__ == '__main__':
 
         num_refs = data.pos_ref.size(0) // data.num_nodes
         num_samples = args.num_confs(num_refs)
-        
+
         data_input = data.clone()
         data_input['pos_ref'] = None
         batch = repeat_data(data_input, num_samples).to(args.device)
-        
+
         clip_local = None
         for _ in range(2):  # Maximum number of retry
             try:
-                pos_init = torch.randn(batch.num_nodes, 3).to(args.device)
+                pos_init = ((batch.RG + batch.PG)/2).to(args.device)
                 pos_gen, pos_gen_traj = model.langevin_dynamics_sample(
                     atom_type=batch.atom_type,
                     pos_init=pos_init,
                     bond_index=batch.edge_index,
                     bond_type=batch.edge_type,
                     batch=batch.batch,
+                    num_nodes_per_graph=batch.num_nodes_per_graph,
                     num_graphs=batch.num_graphs,
                     extend_order=False, # Done in transforms.
                     n_steps=args.n_steps,

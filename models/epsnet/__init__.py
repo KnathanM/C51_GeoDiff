@@ -1,4 +1,5 @@
 from .dualenc import DualEncoderEpsNetwork
+from .diffusion import *
 
 def get_model(config):
     if config.network == 'dualenc':

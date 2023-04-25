@@ -970,7 +970,8 @@ class PackedConformationDataset(ConformationDataset):
                 self._packed_data[self.data[i].idx.item()].append(self.data[i])
         else:
             for i in range(len(self.data)):
-                self._packed_data[self.data[i].smiles].append(self.data[i])
+                #self._packed_data[self.data[i].name].append(self.data[i])
+                self._packed_data[i].append(self.data[i])
         print('[Packed] %d Molecules, %d Conformations.' % (len(self._packed_data), len(self.data)))
 
         new_data = []

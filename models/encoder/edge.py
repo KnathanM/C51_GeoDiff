@@ -58,12 +58,12 @@ class MLPEdgeEncoder(Module):
         Returns:
             edge_attr:  The representation of edges. (E, 2 * num_gaussians)
         """
-        time_step = time_step.unsqueeze(-1).float()
-        t_emb = self.t_emb_mlp(time_step)
-        t_emb = torch.repeat_interleave(t_emb, num_edges_per_graph, dim=0)
-        d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)    
+        #time_step = time_step.unsqueeze(-1).float()
+        #t_emb = self.t_emb_mlp(time_step)
+        #t_emb = torch.repeat_interleave(t_emb, num_edges_per_graph, dim=0)
+        d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)  
         edge_attr = self.bond_emb(edge_type) # (num_edge, hidden_dim)
-        return d_emb * edge_attr * t_emb # (num_edge, hidden)
+        return d_emb * edge_attr #+ t_emb # (num_edge, hidden)
 
 
 def get_edge_encoder(cfg):

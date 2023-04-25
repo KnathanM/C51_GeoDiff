@@ -170,7 +170,6 @@ if __name__ == '__main__':
     try:
         for it in range(start_iter, config.train.max_iters + 1):
             train(it)
-            '''
             if it % config.train.val_freq == 0 or it == config.train.max_iters:
                 avg_val_loss = validate(it)
                 ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
@@ -184,7 +183,6 @@ if __name__ == '__main__':
                     'iteration': it,
                     'avg_val_loss': avg_val_loss,
                 }, ckpt_path)
-                '''
     except KeyboardInterrupt:
         logger.info('Terminating...')
 

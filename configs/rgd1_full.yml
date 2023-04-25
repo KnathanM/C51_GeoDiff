@@ -16,9 +16,9 @@ model:
 
 train:
   seed: 2021
-  batch_size: 3 #64
-  val_freq: 5000
-  max_iters: 500 #3000000
+  batch_size: 64
+  val_freq: 500
+  max_iters: 700000
   max_grad_norm: 10000.0
   anneal_power: 2.0
   optimizer:
@@ -33,6 +33,6 @@ train:
     patience: 10
 
 dataset:
-  train: ./data/GEOM/RGD1/train_data_40k.pkl
-  val: ./data/GEOM/RGD1/val_data_5k.pkl
-  test: ./data/GEOM/RGD1/test_data_1k.pkl
+  train: ./data/GEOM/RGD1_full/train_data_40k.pkl
+  val: ./data/GEOM/RGD1_full/val_data_5k.pkl
+  test: ./data/GEOM/RGD1_full/test_data_1k.pkl
