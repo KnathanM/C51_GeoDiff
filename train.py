@@ -108,8 +108,8 @@ if __name__ == '__main__':
             return_unreduced_loss=True
         )
         loss = loss.mean()
-        if loss.item() > 4 and it > 200:
-            print("Skip the backprop here for stability sake :)")
+        if loss.item() > 20 and it > 200:
+            raise ValueError("Why do you keep getting unstable :(")
             orig_grad_norm = 1000
         else:
             loss.backward()
