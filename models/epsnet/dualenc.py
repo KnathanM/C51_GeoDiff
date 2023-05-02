@@ -13,6 +13,8 @@ from ..encoder import SchNetEncoder, GINEncoder, get_edge_encoder
 from ..geometry import get_distance, get_angle, get_dihedral, eq_transform
 from .diffusion import get_timestep_embedding, get_beta_schedule, nonlinearity
 import pdb
+from copy import deepcopy
+from rdkit.Chem import rdMolAlign as MA
 
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
@@ -137,7 +139,7 @@ class DualEncoderEpsNetwork(nn.Module):
             self.num_timesteps = self.sigmas.size(0)  # betas.shape[0]
 
 
-    def forward(self, atom_type, pos, bond_index, bond_type, batch, time_step, num_nodes_per_graph,
+    def forward(self, atom_type, pos, bond_index, bond_type, batch, time_step, num_nodes_per_graph, rfp, pfp, dfp,
                 edge_index=None, edge_type=None, edge_length=None, return_edges=False, 
                 extend_order=True, extend_radius=True, is_sidechain=None):
         """
@@ -204,7 +206,11 @@ class DualEncoderEpsNetwork(nn.Module):
             edge_length=edge_length,
             edge_type=edge_type,
             time_step=time_step,
-            num_edges_per_graph=num_edges_per_graph
+            edge2graph=edge2graph,
+            rfp=rfp,
+            pfp=pfp,
+            dfp=dfp,
+            num_nodes_per_graph=num_nodes_per_graph
         )   # Embed edges
         edge_attr_global += temb_edge
 
@@ -229,7 +235,11 @@ class DualEncoderEpsNetwork(nn.Module):
             edge_length=edge_length,
             edge_type=edge_type,
             time_step=time_step,
-            num_edges_per_graph=num_edges_per_graph
+            edge2graph=edge2graph,
+            rfp=rfp,
+            pfp=pfp,
+            dfp=dfp,
+            num_nodes_per_graph=num_nodes_per_graph
         )   # Embed edges
         # edge_attr += temb_edge
 
@@ -255,19 +265,63 @@ class DualEncoderEpsNetwork(nn.Module):
             return edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask
         else:
             return edge_inv_global, edge_inv_local
+        
+    def find_rigid_alignment(self, A, B):
+        """
+        See: https://en.wikipedia.org/wiki/Kabsch_algorithm
+        2-D or 3-D registration with known correspondences.
+        Registration occurs in the zero centered coordinate system, and then
+        must be transported back.
+            Args:
+            -    A: Torch tensor of shape (N,D) -- Point Cloud to Align (source)
+            -    B: Torch tensor of shape (N,D) -- Reference Point Cloud (target)
+            Returns:
+            -    R: optimal rotation
+            -    t: optimal translation
+        Test on rotation + translation and on rotation + translation + reflection
+            >>> A = torch.tensor([[1., 1.], [2., 2.], [1.5, 3.]], dtype=torch.float)
+            >>> R0 = torch.tensor([[np.cos(60), -np.sin(60)], [np.sin(60), np.cos(60)]], dtype=torch.float)
+            >>> B = (R0.mm(A.T)).T
+            >>> t0 = torch.tensor([3., 3.])
+            >>> B += t0
+            >>> R, t = find_rigid_alignment(A, B)
+            >>> A_aligned = (R.mm(A.T)).T + t
+            >>> rmsd = torch.sqrt(((A_aligned - B)**2).sum(axis=1).mean())
+            >>> rmsd
+            tensor(3.7064e-07)
+            >>> B *= torch.tensor([-1., 1.])
+            >>> R, t = find_rigid_alignment(A, B)
+            >>> A_aligned = (R.mm(A.T)).T + t
+            >>> rmsd = torch.sqrt(((A_aligned - B)**2).sum(axis=1).mean())
+            >>> rmsd
+            tensor(3.7064e-07)
+        """
+        a_mean = A.mean(axis=0)
+        b_mean = B.mean(axis=0)
+        A_c = A - a_mean
+        B_c = B - b_mean
+        # Covariance matrix
+        H = A_c.T.mm(B_c)
+        U, S, V = torch.svd(H)
+        # Rotation matrix
+        R = V.mm(U.T)
+        # Translation vector
+        t = b_mean[None, :] - R.mm(a_mean[None, :].T).T
+        t = t.T
+        return R, t.squeeze()
     
 
-    def get_loss(self, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G,
+    def get_loss(self, mol, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp,
                  anneal_power=2.0, return_unreduced_loss=False, return_unreduced_edge_loss=False, extend_order=True, extend_radius=True, is_sidechain=None):
         if self.model_type == 'diffusion':
-            return self.get_loss_diffusion(atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G,
+            return self.get_loss_diffusion(mol, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp,
                 anneal_power, return_unreduced_loss, return_unreduced_edge_loss, extend_order, extend_radius, is_sidechain)
         elif self.model_type == 'dsm':
             return self.get_loss_dsm(atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
                 anneal_power, return_unreduced_loss, return_unreduced_edge_loss, extend_order, extend_radius, is_sidechain)
 
 
-    def get_loss_diffusion(self, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, 
+    def get_loss_diffusion(self, mol, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp,
                  anneal_power=2.0, return_unreduced_loss=False, return_unreduced_edge_loss=False, extend_order=True, extend_radius=True, is_sidechain=None):
         N = atom_type.size(0)
         node2graph = batch
@@ -289,7 +343,10 @@ class DualEncoderEpsNetwork(nn.Module):
 
         # pos_perturbed = pos + pos_noise * (1.0 - a_pos).sqrt() / a_pos.sqrt()
         #a_pos.sqrt()
-        pos_perturbed = (1-a_pos)*pos + a_pos*pos_noise
+        # Kabsch align the TS to the linear intepolation
+        R, t = self.find_rigid_alignment(pos, pos_noise)
+        pos_align = (R.mm(pos.T)).T + t
+        pos_perturbed = (1-a_pos)*pos_align + a_pos*pos_noise
 
         # Update invariant edge features, as shown in equation 5-7
         edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
@@ -300,6 +357,9 @@ class DualEncoderEpsNetwork(nn.Module):
             batch = batch,
             time_step = time_step,
             num_nodes_per_graph = num_nodes_per_graph,
+            rfp = rfp,
+            pfp = pfp,
+            dfp = dfp,
             return_edges = True,
             extend_order = extend_order,
             extend_radius = extend_radius,
@@ -307,27 +367,58 @@ class DualEncoderEpsNetwork(nn.Module):
         )   # (E_global, 1), (E_local, 1)
 
         # Grab the generated bond distances to generate the global mask
-        d_perturbed = edge_length
-        global_mask = torch.logical_and(
-                            torch.logical_or(d_perturbed <= self.config.cutoff, local_edge_mask.unsqueeze(-1)),
-                            ~local_edge_mask.unsqueeze(-1)
-                        )
+        #d_perturbed = edge_length
+        #global_mask = torch.logical_and(
+        #                    torch.logical_or(d_perturbed <= self.config.cutoff, local_edge_mask.unsqueeze(-1)),
+        #                    ~local_edge_mask.unsqueeze(-1)
+        #                )
 
-        # Apply the mask and equivariant transform to the generated edge_inv_global with the original geometry to generate the generated geometry
-        edge_inv_global = torch.where(global_mask, edge_inv_global, torch.zeros_like(edge_inv_global))
-        node_eq_global = eq_transform(edge_inv_global, pos, edge_index, edge_length)
+        # Apply the mask and equivariant transform to the generated edge_inv_global with the perturbed geometry to generate mods to pertubed geometry
+        #edge_inv_global = torch.where(global_mask, edge_inv_global, torch.zeros_like(edge_inv_global))
+        node_eq_global = eq_transform(edge_inv_global, pos_perturbed, edge_index, edge_length)
+        denoised_pos = pos_perturbed + node_eq_global
+
+        # Rotate and translate the geometry to compare to the transition state
+        R, t = self.find_rigid_alignment(denoised_pos, pos)
+        score_pos = (R.mm(denoised_pos.T)).T + t
 
         # Calculate global loss with target geometry and generated geometry
-        loss_global = (node_eq_global - pos)**2
+        loss_global = (score_pos - pos)**2
         loss_global = torch.sum(loss_global, dim=-1, keepdim=True)
 
-        return loss_global, loss_global, loss_global
+        benchmark = (pos_perturbed - pos_align)**2
+        benchmark_loss = torch.sum(benchmark, dim=-1, keepdim=True)
+        benchmark_loss_mean = benchmark_loss.mean()
+        ratio = loss_global.mean().item()/benchmark_loss_mean.item()
 
-    def langevin_dynamics_sample(self, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius=True, 
+        return loss_global, loss_global, loss_global, ratio
+    
+    def set_rdmol_positions(self, rdkit_mol, pos):
+        """
+        Args:
+            rdkit_mol:  An `rdkit.Chem.rdchem.Mol` object.
+            pos: (N_atoms, 3)
+        """
+        mol = deepcopy(rdkit_mol)
+        self.set_rdmol_positions_(mol, pos)
+        return mol
+
+    def set_rdmol_positions_(self, mol, pos):
+        """
+        Args:
+            rdkit_mol:  An `rdkit.Chem.rdchem.Mol` object.
+            pos: (N_atoms, 3)
+        """
+        for i in range(pos.shape[0]):
+            mol.GetConformer(0).SetAtomPosition(i, pos[i].tolist())
+        return mol
+
+
+    def langevin_dynamics_sample(self, truth, mol, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, rfp, pfp, dfp, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         if self.model_type == 'diffusion':
-            return self.langevin_dynamics_sample_diffusion(atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius, 
+            return self.langevin_dynamics_sample_diffusion(truth, mol, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, rfp, pfp, dfp, extend_order, extend_radius, 
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
                         global_start_sigma, w_global, w_reg, 
                         sampling_type=kwargs.get("sampling_type", 'ddpm_noisy'), eta=kwargs.get("eta", 1.))
@@ -336,7 +427,7 @@ class DualEncoderEpsNetwork(nn.Module):
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
                         global_start_sigma, w_global, w_reg)
 
-    def langevin_dynamics_sample_diffusion(self, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius=True, 
+    def langevin_dynamics_sample_diffusion(self, truth, mol, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, rfp, pfp, dfp, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         pos_traj = []
@@ -344,8 +435,13 @@ class DualEncoderEpsNetwork(nn.Module):
             seq = range(self.num_timesteps-n_steps+1, self.num_timesteps+1)
             seq_next = [0] + list(seq[:-1])
             pos = pos_init
+            print("RMSD between true geometry and interpolation")
+            truth_mol = self.set_rdmol_positions(mol[0], truth.cpu())
+            interp_mol = self.set_rdmol_positions(mol[0], pos_init.cpu())
+            print(MA.GetBestRMS(interp_mol, truth_mol))
             for i, j in zip(reversed(seq), reversed(seq_next)):
                 t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=pos.device)
+                print(t)
                 # Send position through GFN and recover generated geometry
                 edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
                                 atom_type=atom_type,
@@ -355,21 +451,44 @@ class DualEncoderEpsNetwork(nn.Module):
                                 batch=batch,
                                 time_step=t,
                                 num_nodes_per_graph=num_nodes_per_graph,
+                                rfp = rfp,
+                                pfp = pfp,
+                                dfp = dfp,
                                 return_edges=True,
                                 extend_order=extend_order,
                                 extend_radius=extend_radius,
                                 is_sidechain=is_sidechain
                             )   # (E_global, 1), (E_local, 1)
-                gen_pos = eq_transform(edge_inv_global, pos, edge_index, edge_length)
+                gen_pos_mods = eq_transform(edge_inv_global, pos, edge_index, edge_length)
+                gen_pos = pos + gen_pos_mods
                 
+                # Check against the truth for my sanity
+                print("RMSD between true geometry and timestep " + str(i) + " generated TS")
+                gen_mol = self.set_rdmol_positions(mol[0], gen_pos)
+                print(MA.GetBestRMS(gen_mol, truth_mol))
+
                 # Calculate amount of noise to add to generated geometry
                 next_timestep = torch.full(size=(num_graphs,), fill_value=j, dtype=torch.long, device=pos.device)
                 a = next_timestep / self.num_timesteps
                 a_pos = a.index_select(0, batch).unsqueeze(-1)
 
                 # Add noise to generated geometry
-                pos_next = (1-a_pos)*gen_pos + a_pos*pos_init
+                pos_noised = (1-a_pos)*gen_pos + a_pos*pos_init
+                
+
+                # Cold Diffusion Sampling Algorithm 2
+                a_prior = t / self.num_timesteps
+                a_prior_pos = a_prior.index_select(0, batch).unsqueeze(-1)
+                prior_noised = (1-a_prior_pos)*gen_pos + a_prior_pos*pos_init
+                pos_next = pos - prior_noised + pos_noised
                 pos = pos_next
+
+                # Check how good the new noised geometry is
+                print("RMSD between true geometry and noised timestep " + str(j) + " generated TS")
+                noised_mol = self.set_rdmol_positions(mol[0], pos_next)
+                print(MA.GetBestRMS(noised_mol, truth_mol))
+                #if i == 2:
+                #    raise ValueError("STOP")
                 #pos_traj.append(pos.clone().cpu())
 
         return pos, pos_traj

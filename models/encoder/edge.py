@@ -45,12 +45,13 @@ class MLPEdgeEncoder(Module):
         self.bond_emb = Embedding(100, embedding_dim=self.hidden_dim)
         self.mlp = MultiLayerPerceptron(1, [self.hidden_dim, self.hidden_dim], activation=activation)
         self.t_emb_mlp = MultiLayerPerceptron(1, [self.hidden_dim, self.hidden_dim], activation=activation)
+        self.fp_mlp = MultiLayerPerceptron(3072, [self.hidden_dim, self.hidden_dim], activation=activation)
 
     @property
     def out_channels(self):
         return self.hidden_dim
 
-    def forward(self, edge_length, edge_type, time_step, num_edges_per_graph):
+    def forward(self, edge_length, edge_type, time_step, edge2graph, rfp, pfp, dfp, num_nodes_per_graph):
         """
         Input:
             edge_length: The length of edges, shape=(E, 1).
@@ -61,9 +62,13 @@ class MLPEdgeEncoder(Module):
         #time_step = time_step.unsqueeze(-1).float()
         #t_emb = self.t_emb_mlp(time_step)
         #t_emb = torch.repeat_interleave(t_emb, num_edges_per_graph, dim=0)
+        fp = torch.cat((rfp, pfp, dfp))
+        fp = fp.reshape(num_nodes_per_graph.size(dim=0), 3072).float()
+        fp_emb = self.fp_mlp(fp)
+        fp_emb = fp_emb.index_select(0, edge2graph)  # (E , dim)
         d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)  
         edge_attr = self.bond_emb(edge_type) # (num_edge, hidden_dim)
-        return d_emb * edge_attr #+ t_emb # (num_edge, hidden)
+        return d_emb * edge_attr + fp_emb # (num_edge, hidden)
 
 
 def get_edge_encoder(cfg):

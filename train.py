@@ -90,7 +90,8 @@ if __name__ == '__main__':
         optimizer_global.zero_grad()
         optimizer_local.zero_grad()
         batch = next(train_iterator).to(args.device)
-        loss, loss_global, loss_local = model.get_loss(
+        loss, loss_global, loss_local, ratio = model.get_loss(
+            mol = batch.rdmol,
             atom_type=batch.atom_type,
             pos=batch.pos,
             bond_index=batch.edge_index,
@@ -100,17 +101,24 @@ if __name__ == '__main__':
             num_graphs=batch.num_graphs,
             R_G = batch.RG,
             P_G = batch.PG,
+            rfp = batch.rfp,
+            pfp = batch.pfp,
+            dfp = batch.dfp,
             anneal_power=config.train.anneal_power,
             return_unreduced_loss=True
         )
         loss = loss.mean()
-        loss.backward()
-        orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
-        optimizer_global.step()
-        optimizer_local.step()
+        if loss.item() > 4 and it > 200:
+            print("Skip the backprop here for stability sake :)")
+            orig_grad_norm = 1000
+        else:
+            loss.backward()
+            orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
+            optimizer_global.step()
+            optimizer_local.step()
 
-        logger.info('[Train] Iter %05d | Loss %.2f | Loss(Global) %.2f | Loss(Local) %.2f | Grad %.2f | LR(Global) %.6f | LR(Local) %.6f' % (
-            it, loss.item(), loss_global.mean().item(), loss_local.mean().item(), orig_grad_norm, optimizer_global.param_groups[0]['lr'], optimizer_local.param_groups[0]['lr'],
+        logger.info('[Train] Iter %05d | Loss %.2f | Loss(Global) %.2f | Ratio %.2f | Grad %.2f | LR(Global) %.6f | LR(Local) %.6f' % (
+            it, loss.item(), loss_global.mean().item(), ratio, orig_grad_norm, optimizer_global.param_groups[0]['lr'], optimizer_local.param_groups[0]['lr'],
         ))
         writer.add_scalar('train/loss', loss, it)
         writer.add_scalar('train/loss_global', loss_global.mean(), it)
@@ -128,7 +136,8 @@ if __name__ == '__main__':
             model.eval()
             for i, batch in enumerate(tqdm(val_loader, desc='Validation')):
                 batch = batch.to(args.device)
-                loss, loss_global, loss_local = model.get_loss(
+                loss, loss_global, loss_local, ratio = model.get_loss(
+                    mol = batch.rdmol,
                     atom_type=batch.atom_type,
                     pos=batch.pos,
                     bond_index=batch.edge_index,
@@ -138,6 +147,9 @@ if __name__ == '__main__':
                     num_graphs=batch.num_graphs,
                     R_G = batch.RG,
                     P_G = batch.PG,
+                    rfp = batch.rfp,
+                    pfp = batch.pfp,
+                    dfp = batch.dfp,
                     anneal_power=config.train.anneal_power,
                     return_unreduced_loss=True
                 )
@@ -158,8 +170,8 @@ if __name__ == '__main__':
             scheduler_global.step()
             scheduler_local.step()
 
-        logger.info('[Validate] Iter %05d | Loss %.6f | Loss(Global) %.6f | Loss(Local) %.6f' % (
-            it, avg_loss, avg_loss_global, avg_loss_local,
+        logger.info('[Validate] Iter %05d | Loss %.6f | Loss(Global) %.6f | Ratio %.6f' % (
+            it, avg_loss, avg_loss_global, ratio,
         ))
         writer.add_scalar('val/loss', avg_loss, it)
         writer.add_scalar('val/loss_global', avg_loss_global, it)
