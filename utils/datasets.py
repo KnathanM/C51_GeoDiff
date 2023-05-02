@@ -1013,14 +1013,17 @@ class PackedConformationDataset(ConformationDataset):
         data = self.new_data[idx].clone()
         if self.transform is not None:
             data = self.transform(data)
+        data.rfp = torch.zeros([1024])
         for smiles in data.name.split():
             mol_reac_init = Chem.MolFromSmiles(smiles)
             mol_reac = Chem.AddHs(mol_reac_init)
-        data.rfp = torch.tensor(np.array(AllChem.GetMorganFingerprintAsBitVect(data.rdmol, 3, nBits=1024)))
-        mol_prod_init = Chem.MolFromSmiles(data.prod_name)
-        mol_prod = Chem.AddHs(mol_prod_init)
-        data.pfp = torch.tensor(np.array(AllChem.GetMorganFingerprintAsBitVect(mol_prod, 3, nBits=1024)))
-        data.dfp = data.pfp - data.rfp        
+            data.rfp = data.rfp + torch.tensor(np.array(AllChem.GetMorganFingerprintAsBitVect(mol_reac, 3, nBits=1024)))
+        data.pfp = torch.zeros([1024])
+        for smiles in data.prod_name.split():
+            mol_prod_init = Chem.MolFromSmiles(smiles)
+            mol_prod = Chem.AddHs(mol_prod_init)
+            data.pfp = data.pfp + torch.tensor(np.array(AllChem.GetMorganFingerprintAsBitVect(mol_prod, 3, nBits=1024)))
+        data.dfp = data.pfp - data.rfp       
         return data
 
     def __len__(self):
