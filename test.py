@@ -116,9 +116,9 @@ if __name__ == '__main__':
                     batch=batch.batch,
                     num_nodes_per_graph=batch.num_nodes_per_graph,
                     num_graphs=batch.num_graphs,
-                    rfp = batch.rfp,
-                    pfp = batch.pfp,
-                    dfp = batch.dfp,
+                    # rfp = batch.rfp,
+                    # pfp = batch.pfp,
+                    # dfp = batch.dfp,
                     extend_order=False, # Done in transforms.
                     n_steps=args.n_steps,
                     step_lr=1e-6,
