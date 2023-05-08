@@ -96,6 +96,8 @@ if __name__ == '__main__':
             pos=batch.pos,
             bond_index=batch.edge_index,
             bond_type=batch.edge_type,
+            bond_index_prod = batch.edge_index_prod,
+            bond_type_prod = batch.edge_type_prod,
             batch=batch.batch,
             num_nodes_per_graph=batch.num_nodes_per_graph,
             num_graphs=batch.num_graphs,
@@ -104,6 +106,7 @@ if __name__ == '__main__':
             rfp = batch.rfp,
             pfp = batch.pfp,
             dfp = batch.dfp,
+            noise = config.model.noise,
             anneal_power=config.train.anneal_power,
             return_unreduced_loss=True
         )
@@ -142,6 +145,8 @@ if __name__ == '__main__':
                     pos=batch.pos,
                     bond_index=batch.edge_index,
                     bond_type=batch.edge_type,
+                    bond_index_prod = batch.edge_index_prod,
+                    bond_type_prod = batch.edge_type_prod,
                     batch=batch.batch,
                     num_nodes_per_graph=batch.num_nodes_per_graph,
                     num_graphs=batch.num_graphs,
@@ -150,6 +155,7 @@ if __name__ == '__main__':
                     rfp = batch.rfp,
                     pfp = batch.pfp,
                     dfp = batch.dfp,
+                    noise = config.model.noise,
                     anneal_power=config.train.anneal_power,
                     return_unreduced_loss=True
                 )

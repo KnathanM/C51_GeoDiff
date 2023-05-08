@@ -105,7 +105,10 @@ if __name__ == '__main__':
         clip_local = None
         for _ in range(2):  # Maximum number of retry
             try:
-                pos_init = ((batch.RG + batch.PG)/2).to(args.device)
+                if config.model.noise == "interp":
+                    pos_init = ((batch.RG + batch.PG)/2).to(args.device)
+                elif config.model.noise == "gaussian":
+                    pos_init = torch.randn(batch.num_nodes, 3).to(args.device)
                 pos_gen, pos_gen_traj = model.langevin_dynamics_sample(
                     truth = batch.pos,
                     mol = batch.rdmol,
@@ -113,12 +116,17 @@ if __name__ == '__main__':
                     pos_init=pos_init,
                     bond_index=batch.edge_index,
                     bond_type=batch.edge_type,
+                    bond_index_prod = batch.edge_index_prod,
+                    bond_type_prod = batch.edge_type_prod,
                     batch=batch.batch,
                     num_nodes_per_graph=batch.num_nodes_per_graph,
                     num_graphs=batch.num_graphs,
+                    R_G = batch.RG,
+                    P_G = batch.PG,
                     rfp = batch.rfp,
                     pfp = batch.pfp,
                     dfp = batch.dfp,
+                    noise = config.model.noise,
                     extend_order=False, # Done in transforms.
                     n_steps=args.n_steps,
                     step_lr=1e-6,
