@@ -127,6 +127,9 @@ if __name__ == '__main__':
                     pfp = batch.pfp,
                     dfp = batch.dfp,
                     noise = config.model.noise,
+                    # rfp = batch.rfp,
+                    # pfp = batch.pfp,
+                    # dfp = batch.dfp,
                     extend_order=False, # Done in transforms.
                     n_steps=args.n_steps,
                     step_lr=1e-6,

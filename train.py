@@ -106,7 +106,6 @@ if __name__ == '__main__':
             rfp = batch.rfp,
             pfp = batch.pfp,
             dfp = batch.dfp,
-            noise = config.model.noise,
             anneal_power=config.train.anneal_power,
             return_unreduced_loss=True
         )
@@ -137,7 +136,7 @@ if __name__ == '__main__':
         sum_loss_local, sum_n_local = 0, 0
         with torch.no_grad():
             model.eval()
-            for i, batch in enumerate(tqdm(val_loader, desc='Validation')):
+            for i, batch in enumerate(tqdm(val_loader, desc='Validation', disable=True)):
                 batch = batch.to(args.device)
                 loss, loss_global, loss_local, ratio = model.get_loss(
                     mol = batch.rdmol,
@@ -155,7 +154,6 @@ if __name__ == '__main__':
                     rfp = batch.rfp,
                     pfp = batch.pfp,
                     dfp = batch.dfp,
-                    noise = config.model.noise,
                     anneal_power=config.train.anneal_power,
                     return_unreduced_loss=True
                 )
