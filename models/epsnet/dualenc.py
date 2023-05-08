@@ -139,7 +139,7 @@ class DualEncoderEpsNetwork(nn.Module):
             self.num_timesteps = self.sigmas.size(0)  # betas.shape[0]
 
 
-    def forward(self, atom_type, pos, bond_index, bond_type, batch, time_step, num_nodes_per_graph, rfp, pfp, dfp,
+    def forward(self, atom_type, pos, R_G, P_G, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, time_step, num_nodes_per_graph, rfp, pfp, dfp,
                 edge_index=None, edge_type=None, edge_length=None, return_edges=False, 
                 extend_order=True, extend_radius=True, is_sidechain=None):
         """
@@ -164,6 +164,32 @@ class DualEncoderEpsNetwork(nn.Module):
                 is_sidechain=is_sidechain,
             )
             edge_length = get_distance(pos, edge_index).unsqueeze(-1)   # (E, 1)
+            edge_index_reac, edge_type_reac = extend_graph_order_radius(
+                num_nodes=N,
+                pos=R_G,
+                edge_index=bond_index,
+                edge_type=bond_type,
+                batch=batch,
+                order=self.config.edge_order,
+                cutoff=self.config.cutoff,
+                extend_order=extend_order,
+                extend_radius=extend_radius,
+                is_sidechain=is_sidechain,
+            )
+            edge_length_reac = get_distance(R_G, edge_index_reac).unsqueeze(-1)   # (E, 1)
+            edge_index_prod, edge_type_prod = extend_graph_order_radius(
+                num_nodes=N,
+                pos=P_G,
+                edge_index=bond_index_prod,
+                edge_type=bond_type_prod,
+                batch=batch,
+                order=self.config.edge_order,
+                cutoff=self.config.cutoff,
+                extend_order=extend_order,
+                extend_radius=extend_radius,
+                is_sidechain=is_sidechain,
+            )
+            edge_length_prod = get_distance(P_G, edge_index_prod).unsqueeze(-1)   # (E, 1)
         local_edge_mask = is_local_edge(edge_type)  # (E, )
 
         # Emb time_step
@@ -214,6 +240,32 @@ class DualEncoderEpsNetwork(nn.Module):
         )   # Embed edges
         edge_attr_global += temb_edge
 
+        # Encoding global reactant
+        edge_attr_global_reac = self.edge_encoder_global(
+            edge_length=edge_length_reac,
+            edge_type=edge_type_reac,
+            time_step=time_step,
+            edge2graph=edge2graph,
+            rfp=rfp,
+            pfp=pfp,
+            dfp=dfp,
+            num_nodes_per_graph=num_nodes_per_graph
+        )   # Embed edges
+        edge_attr_global_reac += temb_edge
+
+        # Encoding global product
+        edge_attr_global_prod = self.edge_encoder_global(
+            edge_length=edge_length_prod,
+            edge_type=edge_type_prod,
+            time_step=time_step,
+            edge2graph=edge2graph,
+            rfp=rfp,
+            pfp=pfp,
+            dfp=dfp,
+            num_nodes_per_graph=num_nodes_per_graph
+        )   # Embed edges
+        edge_attr_global_prod += temb_edge
+
         # Global
         node_attr_global = self.encoder_global(
             z=atom_type,
@@ -221,12 +273,42 @@ class DualEncoderEpsNetwork(nn.Module):
             edge_length=edge_length,
             edge_attr=edge_attr_global,
         )
+        # Global reactant
+        node_attr_global_reac = self.encoder_global(
+            z=atom_type,
+            edge_index=edge_index_reac,
+            edge_length=edge_length_reac,
+            edge_attr=edge_attr_global_reac,
+        )
+        # Global product
+        node_attr_global_prod = self.encoder_global(
+            z=atom_type,
+            edge_index=edge_index_prod,
+            edge_length=edge_length_prod,
+            edge_attr=edge_attr_global_prod,
+        )
         ## Assemble pairwise features
         h_pair_global = assemble_atom_pair_feature(
             node_attr=node_attr_global,
             edge_index=edge_index,
             edge_attr=edge_attr_global,
         )    # (E_global, 2H)
+        ## Assemble pairwise features reactant
+        h_pair_global_reac = assemble_atom_pair_feature(
+            node_attr=node_attr_global_reac,
+            edge_index=edge_index_reac,
+            edge_attr=edge_attr_global_reac,
+        )    # (E_global, 2H)
+        ## Assemble pairwise features product
+        h_pair_global_prod = assemble_atom_pair_feature(
+            node_attr=node_attr_global_prod,
+            edge_index=edge_index_prod,
+            edge_attr=edge_attr_global_prod,
+        )    # (E_global, 2H)
+
+        # Combine encoding of TS, reactant, and product
+        h_pair_global = h_pair_global + h_pair_global_reac + h_pair_global_prod
+
         ## Invariant features of edges (radius graph, global)
         edge_inv_global = self.grad_global_dist_mlp(h_pair_global) * (1.0 / sigma_edge)    # (E_global, 1)
         
@@ -311,17 +393,17 @@ class DualEncoderEpsNetwork(nn.Module):
         return R, t.squeeze()
     
 
-    def get_loss(self, mol, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp,
+    def get_loss(self, mol, atom_type, pos, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise,
                  anneal_power=2.0, return_unreduced_loss=False, return_unreduced_edge_loss=False, extend_order=True, extend_radius=True, is_sidechain=None):
         if self.model_type == 'diffusion':
-            return self.get_loss_diffusion(mol, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp,
+            return self.get_loss_diffusion(mol, atom_type, pos, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise,
                 anneal_power, return_unreduced_loss, return_unreduced_edge_loss, extend_order, extend_radius, is_sidechain)
         elif self.model_type == 'dsm':
             return self.get_loss_dsm(atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
                 anneal_power, return_unreduced_loss, return_unreduced_edge_loss, extend_order, extend_radius, is_sidechain)
 
 
-    def get_loss_diffusion(self, mol, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp,
+    def get_loss_diffusion(self, mol, atom_type, pos, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise,
                  anneal_power=2.0, return_unreduced_loss=False, return_unreduced_edge_loss=False, extend_order=True, extend_radius=True, is_sidechain=None):
         N = atom_type.size(0)
         node2graph = batch
@@ -335,14 +417,11 @@ class DualEncoderEpsNetwork(nn.Module):
         a = time_step / self.num_timesteps  # (G, )
         # Perterb pos
         a_pos = a.index_select(0, node2graph).unsqueeze(-1)  # (N, 1)
-        # This is the original noising function which adds gaussian noise, uncomment to get gaussian noise.
-        # pos_noise = torch.zeros(size=pos.size(), device=pos.device)
-        # pos_noise.normal_()
-        # This is the new noising function which uses the interpolation between reactant and product
-        pos_noise = (R_G + P_G) / 2
-
-        # pos_perturbed = pos + pos_noise * (1.0 - a_pos).sqrt() / a_pos.sqrt()
-        #a_pos.sqrt()
+        if noise == "gaussian":
+            pos_noise = torch.zeros(size=pos.size(), device=pos.device)
+            pos_noise.normal_()
+        elif noise == "interp":
+            pos_noise = (R_G + P_G) / 2
         # Kabsch align the TS to the linear intepolation
         R, t = self.find_rigid_alignment(pos, pos_noise)
         pos_align = (R.mm(pos.T)).T + t
@@ -352,8 +431,12 @@ class DualEncoderEpsNetwork(nn.Module):
         edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
             atom_type = atom_type,
             pos = pos_perturbed,
+            R_G = R_G,
+            P_G = P_G,
             bond_index = bond_index,
             bond_type = bond_type,
+            bond_index_prod = bond_index_prod,
+            bond_type_prod = bond_type_prod,
             batch = batch,
             time_step = time_step,
             num_nodes_per_graph = num_nodes_per_graph,
@@ -414,11 +497,11 @@ class DualEncoderEpsNetwork(nn.Module):
         return mol
 
 
-    def langevin_dynamics_sample(self, truth, mol, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, rfp, pfp, dfp, extend_order, extend_radius=True, 
+    def langevin_dynamics_sample(self, truth, mol, atom_type, pos_init, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         if self.model_type == 'diffusion':
-            return self.langevin_dynamics_sample_diffusion(truth, mol, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, rfp, pfp, dfp, extend_order, extend_radius, 
+            return self.langevin_dynamics_sample_diffusion(truth, mol, atom_type, pos_init, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise, extend_order, extend_radius, 
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
                         global_start_sigma, w_global, w_reg, 
                         sampling_type=kwargs.get("sampling_type", 'ddpm_noisy'), eta=kwargs.get("eta", 1.))
@@ -427,7 +510,7 @@ class DualEncoderEpsNetwork(nn.Module):
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
                         global_start_sigma, w_global, w_reg)
 
-    def langevin_dynamics_sample_diffusion(self, truth, mol, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, rfp, pfp, dfp, extend_order, extend_radius=True, 
+    def langevin_dynamics_sample_diffusion(self, truth, mol, atom_type, pos_init, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         pos_traj = []
@@ -441,13 +524,16 @@ class DualEncoderEpsNetwork(nn.Module):
             print(MA.GetBestRMS(interp_mol, truth_mol))
             for i, j in zip(reversed(seq), reversed(seq_next)):
                 t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=pos.device)
-                print(t)
                 # Send position through GFN and recover generated geometry
                 edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
                                 atom_type=atom_type,
                                 pos=pos,
+                                R_G = R_G,
+                                P_G = P_G,
                                 bond_index=bond_index,
                                 bond_type=bond_type,
+                                bond_index_prod = bond_index_prod,
+                                bond_type_prod = bond_type_prod,
                                 batch=batch,
                                 time_step=t,
                                 num_nodes_per_graph=num_nodes_per_graph,
@@ -463,9 +549,10 @@ class DualEncoderEpsNetwork(nn.Module):
                 gen_pos = pos + gen_pos_mods
                 
                 # Check against the truth for my sanity
-                print("RMSD between true geometry and timestep " + str(i) + " generated TS")
-                gen_mol = self.set_rdmol_positions(mol[0], gen_pos)
-                print(MA.GetBestRMS(gen_mol, truth_mol))
+                if i == 1:
+                    print("RMSD between true geometry and timestep " + str(i) + " generated TS")
+                    gen_mol = self.set_rdmol_positions(mol[0], gen_pos)
+                    print(MA.GetBestRMS(gen_mol, truth_mol))
 
                 # Calculate amount of noise to add to generated geometry
                 next_timestep = torch.full(size=(num_graphs,), fill_value=j, dtype=torch.long, device=pos.device)
@@ -473,23 +560,18 @@ class DualEncoderEpsNetwork(nn.Module):
                 a_pos = a.index_select(0, batch).unsqueeze(-1)
 
                 # Add noise to generated geometry
+                if noise == "gaussian":
+                    pos_init = torch.randn(num_nodes_per_graph[0], 3).to(pos.device)
+
                 pos_noised = (1-a_pos)*gen_pos + a_pos*pos_init
                 
 
-                # Cold Diffusion Sampling Algorithm 2
+                # I currently have basic sampling implemented here, to implement Algorithm 2, set pos = pos_next
                 a_prior = t / self.num_timesteps
                 a_prior_pos = a_prior.index_select(0, batch).unsqueeze(-1)
                 prior_noised = (1-a_prior_pos)*gen_pos + a_prior_pos*pos_init
                 pos_next = pos - prior_noised + pos_noised
-                pos = pos_next
-
-                # Check how good the new noised geometry is
-                print("RMSD between true geometry and noised timestep " + str(j) + " generated TS")
-                noised_mol = self.set_rdmol_positions(mol[0], pos_next)
-                print(MA.GetBestRMS(noised_mol, truth_mol))
-                #if i == 2:
-                #    raise ValueError("STOP")
-                #pos_traj.append(pos.clone().cpu())
+                pos = pos_noised
 
         return pos, pos_traj
 

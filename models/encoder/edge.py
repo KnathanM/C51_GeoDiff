@@ -68,7 +68,7 @@ class MLPEdgeEncoder(Module):
         fp_emb = fp_emb.index_select(0, edge2graph)  # (E , dim)
         d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)  
         edge_attr = self.bond_emb(edge_type) # (num_edge, hidden_dim)
-        return d_emb * edge_attr + fp_emb # (num_edge, hidden)
+        return d_emb * edge_attr #+ fp_emb # (num_edge, hidden)
 
 
 def get_edge_encoder(cfg):
