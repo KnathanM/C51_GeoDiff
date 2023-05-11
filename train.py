@@ -106,6 +106,7 @@ if __name__ == '__main__':
             rfp = batch.rfp,
             pfp = batch.pfp,
             dfp = batch.dfp,
+            noise = config.model.noise,
             anneal_power=config.train.anneal_power,
             return_unreduced_loss=True
         )
@@ -154,6 +155,7 @@ if __name__ == '__main__':
                     rfp = batch.rfp,
                     pfp = batch.pfp,
                     dfp = batch.dfp,
+                    noise = config.model.noise,
                     anneal_power=config.train.anneal_power,
                     return_unreduced_loss=True
                 )

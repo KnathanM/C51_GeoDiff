@@ -11,6 +11,7 @@ from models.epsnet import *
 from utils.datasets import *
 from utils.transforms import *
 from utils.misc import *
+from statistics import mean, stdev
 
 
 def num_confs(num:str):
@@ -89,7 +90,7 @@ if __name__ == '__main__':
             results = pickle.load(f)
         for data in results:
             done_smiles.add(data.smiles)
-    
+    RMSD_results = []
     for i, data in enumerate(tqdm(test_set_selected)):
         if data.name in done_smiles:
             logger.info('Molecule#%d is already done.' % i)
@@ -101,7 +102,6 @@ if __name__ == '__main__':
         data_input = data.clone()
         data_input['pos_ref'] = None
         batch = repeat_data(data_input, num_samples).to(args.device)
-
         clip_local = None
         for _ in range(2):  # Maximum number of retry
             try:
@@ -109,7 +109,7 @@ if __name__ == '__main__':
                     pos_init = ((batch.RG + batch.PG)/2).to(args.device)
                 elif config.model.noise == "gaussian":
                     pos_init = torch.randn(batch.num_nodes, 3).to(args.device)
-                pos_gen, pos_gen_traj = model.langevin_dynamics_sample(
+                pos_gen, pos_gen_traj, rmsd = model.langevin_dynamics_sample(
                     truth = batch.pos,
                     mol = batch.rdmol,
                     atom_type=batch.atom_type,
@@ -130,7 +130,6 @@ if __name__ == '__main__':
                     # rfp = batch.rfp,
                     # pfp = batch.pfp,
                     # dfp = batch.dfp,
-                    extend_order=False, # Done in transforms.
                     n_steps=args.n_steps,
                     step_lr=1e-6,
                     w_global=args.w_global,
@@ -140,6 +139,7 @@ if __name__ == '__main__':
                     sampling_type=args.sampling_type,
                     eta=args.eta
                 )
+                RMSD_results.append(rmsd)
                 pos_gen = pos_gen.cpu()
                 if args.save_traj:
                     data.pos_gen = torch.stack(pos_gen_traj)
@@ -157,7 +157,11 @@ if __name__ == '__main__':
             except FloatingPointError:
                 clip_local = 20
                 logger.warning('Retrying with local clipping.')
-
+    print(RMSD_results)
+    print("Mean")
+    print(mean(RMSD_results))
+    print("St Dev")
+    print(stdev(RMSD_results))
     save_path = os.path.join(output_dir, 'samples_all.pkl')
     logger.info('Saving samples to: %s' % save_path)
 

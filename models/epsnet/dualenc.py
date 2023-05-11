@@ -15,6 +15,7 @@ from .diffusion import get_timestep_embedding, get_beta_schedule, nonlinearity
 import pdb
 from copy import deepcopy
 from rdkit.Chem import rdMolAlign as MA
+from statistics import mean, stdev
 
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
@@ -497,7 +498,7 @@ class DualEncoderEpsNetwork(nn.Module):
         return mol
 
 
-    def langevin_dynamics_sample(self, truth, mol, atom_type, pos_init, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise, extend_order, extend_radius=True, 
+    def langevin_dynamics_sample(self, truth, mol, atom_type, pos_init, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise, extend_order=True, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         if self.model_type == 'diffusion':
@@ -510,18 +511,21 @@ class DualEncoderEpsNetwork(nn.Module):
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
                         global_start_sigma, w_global, w_reg)
 
-    def langevin_dynamics_sample_diffusion(self, truth, mol, atom_type, pos_init, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise, extend_order, extend_radius=True, 
+    def langevin_dynamics_sample_diffusion(self, truth, mol, atom_type, pos_init_ugh, bond_index, bond_type, bond_index_prod, bond_type_prod, batch, num_nodes_per_graph, num_graphs, R_G, P_G, rfp, pfp, dfp, noise, extend_order=True, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
                                  global_start_sigma=float('inf'), w_global=0.2, w_reg=1.0, **kwargs):
         pos_traj = []
         with torch.no_grad():
             seq = range(self.num_timesteps-n_steps+1, self.num_timesteps+1)
             seq_next = [0] + list(seq[:-1])
-            pos = pos_init
-            print("RMSD between true geometry and interpolation")
+            pos = pos_init_ugh
+            #print("RMSD between true geometry and interpolation")
             truth_mol = self.set_rdmol_positions(mol[0], truth.cpu())
-            interp_mol = self.set_rdmol_positions(mol[0], pos_init.cpu())
-            print(MA.GetBestRMS(interp_mol, truth_mol))
+            interp_mol = self.set_rdmol_positions(mol[0], pos_init_ugh.cpu())
+            dis = MA.GetBestRMS(interp_mol, truth_mol)
+            #print(dis)
+            RMSD_traj = []
+            RMSD_traj.append(dis)
             for i, j in zip(reversed(seq), reversed(seq_next)):
                 t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=pos.device)
                 # Send position through GFN and recover generated geometry
@@ -549,10 +553,10 @@ class DualEncoderEpsNetwork(nn.Module):
                 gen_pos = pos + gen_pos_mods
                 
                 # Check against the truth for my sanity
-                if i == 1:
-                    print("RMSD between true geometry and timestep " + str(i) + " generated TS")
-                    gen_mol = self.set_rdmol_positions(mol[0], gen_pos)
-                    print(MA.GetBestRMS(gen_mol, truth_mol))
+                #print("RMSD between true geometry and timestep " + str(i) + " generated TS")
+                gen_mol = self.set_rdmol_positions(mol[0], gen_pos)
+                other_dis = MA.GetBestRMS(gen_mol, truth_mol)
+                #print(other_dis)
 
                 # Calculate amount of noise to add to generated geometry
                 next_timestep = torch.full(size=(num_graphs,), fill_value=j, dtype=torch.long, device=pos.device)
@@ -561,19 +565,24 @@ class DualEncoderEpsNetwork(nn.Module):
 
                 # Add noise to generated geometry
                 if noise == "gaussian":
-                    pos_init = torch.randn(num_nodes_per_graph[0], 3).to(pos.device)
+                    pos_init_ugh = torch.randn(num_nodes_per_graph[0], 3).to(pos.device)
 
-                pos_noised = (1-a_pos)*gen_pos + a_pos*pos_init
-                
+                pos_noised = (1-a_pos)*gen_pos + a_pos*pos_init_ugh
+                #print("RMSD between true geometry and noised timestep " + str(j))
+                noise_mol = self.set_rdmol_positions(mol[0], pos_noised)
+                another_dis = MA.GetBestRMS(noise_mol, truth_mol)
+                #print(another_dis)
+                RMSD_traj.append(another_dis)
+                if another_dis > 10:
+                    break
 
                 # I currently have basic sampling implemented here, to implement Algorithm 2, set pos = pos_next
                 a_prior = t / self.num_timesteps
                 a_prior_pos = a_prior.index_select(0, batch).unsqueeze(-1)
-                prior_noised = (1-a_prior_pos)*gen_pos + a_prior_pos*pos_init
+                prior_noised = (1-a_prior_pos)*gen_pos + a_prior_pos*pos_init_ugh
                 pos_next = pos - prior_noised + pos_noised
                 pos = pos_noised
-
-        return pos, pos_traj
+        return pos, pos_traj, another_dis
 
     def langevin_dynamics_sample_diffusion_old(self, atom_type, pos_init, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, extend_order, extend_radius=True, 
                                  n_steps=100, step_lr=0.0000010, clip=1000, clip_local=None, clip_pos=None, min_sigma=0, is_sidechain=None,
